@@ -1,0 +1,62 @@
+#!/bin/bash -eu
+##
+## rt-docker-du -- do a du on an artifactory docker repository.
+##   Sizes are in bytes.
+##
+## This is a bare-minimum script to get the job done. More hackery 
+## might be forthcoming.
+##
+## Released under the Apache 2.0 License. See the LICENCE file.
+##
+
+##
+# These 3 variables will need to be set
+
+# Artifactory base path, no trailing slashes
+artifactory_base=https://My-Artifactory-Host
+
+# The name of the docker repository on Artifactory
+artifactory_docker_repository=docker_local
+
+# This file must contain a valid artifactory API key
+artifactory_key=$(cat "$HOME/etc/artifactory-key")
+
+
+## No changes needed after this point.
+
+artifactory_api=$artifactory_base/artifactory/api
+artifactory_docker=$artifactory_api/storage/$artifactory_docker_repository
+artifactory_aql=$artifactory_api/search/aql
+
+# common curl headers
+function curl_headers() {
+  echo "--header Content-Type:text/plain --header X-JFrog-Art-Api:$artifactory_key"
+}
+
+# Artifactory AQL query formula for finding "manifest.json" files
+function aql_find_manifests() {
+  echo "{
+    \"name\" : \"manifest.json\",
+    \"repo\" : {\"\$eq\" : \"$artifactory_docker_repository\" }
+   }"
+}
+
+# Get list of paths in the artifactory repository
+function get_path_list() {
+  curl --silent -X POST $(curl_headers) \
+       -k $artifactory_aql \
+       -d "items.find($(aql_find_manifests))" | \
+    jq -c '.results[].path' | sed -e 's/"//g'
+}
+
+# Add up the sizes of the layers in an image
+function get_image_size() {
+  image_path=$1
+  curl --silent $(curl_headers) \
+       "$artifactory_docker/$image_path?list" | jq -c '[.files[].size] | add'
+}
+
+for path in $(get_path_list); do
+  size=$(get_image_size "$path")
+  printf "%-12s %s\n" "$size" "$path"
+done
